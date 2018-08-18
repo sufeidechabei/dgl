@@ -475,7 +475,7 @@ class DGLGraph(DiGraph):
         else:
             self._msg_frame.append({__MSG__ : msgs})
 
-    def update_edge(self, u, v, edge_func=None, batchable=False):
+    def update_edge(self, u=ALL, v=ALL, edge_func=None, batchable=False):
         """Update representation on edge u->v
 
         The edge function should be compatible with following signature:
@@ -891,6 +891,25 @@ class DGLGraph(DiGraph):
             if message_func == 'from_src' and reduce_func == 'sum':
                 # TODO(minjie): use lazy dict for reduced_msgs
                 adjmat = self.cached_graph.adjmat(self.context)
+                reduced_msgs = {}
+                for key in self._node_frame.schemes:
+                    col = self._node_frame[key]
+                    reduced_msgs[key] = F.spmm(adjmat, col)
+                if len(reduced_msgs) == 1 and __REPR__ in reduced_msgs:
+                    reduced_msgs = reduced_msgs[__REPR__]
+                node_repr = self.get_n_repr()
+                self.set_n_repr(update_func(node_repr, reduced_msgs))
+            elif message_func == 'src_mul_edge' and reduce_func == 'sum':
+                edge_repr = self.get_e_repr()
+                # must have only one edge feature, must be scalar
+                # FIXME: what's the semantics for multiple edge features? Cartesian?
+                assert len(edge_repr) == 1, \
+                        "spmv only support one edge feature"
+                edge_repr = list(edge_repr.values())[0]
+                assert edge_repr.shape[1] == 1, \
+                        "spmv only support scalar edge feature"
+                adjmat = self.cached_graph.adjmat(self.context)
+                adjmat = F.sparse_tensor(adjmat._indices(), edge_repr.view(-1), adjmat.size())
                 reduced_msgs = {}
                 for key in self._node_frame.schemes:
                     col = self._node_frame[key]
