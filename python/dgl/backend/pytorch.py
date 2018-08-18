@@ -52,6 +52,9 @@ def scatter_row(data, row_index, value):
 def broadcast_to(x, to_array):
     return x + th.zeros_like(to_array)
 
+def view(x, shape):
+    return x.view(shape)
+
 nonzero = th.nonzero
 squeeze = th.squeeze
 unsqueeze = th.unsqueeze
