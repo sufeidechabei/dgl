@@ -15,17 +15,20 @@ class CachedGraph:
     def __init__(self):
         self._graph = igraph.Graph(directed=True)
         self._adjmat = None  # cached adjacency matrix
+        self._edges = None
 
     def add_nodes(self, num_nodes):
         self._graph.add_vertices(num_nodes)
 
     def add_edge(self, u, v):
         self._graph.add_edge(u, v)
+        self._edges = None
 
     def add_edges(self, u, v):
         # The edge will be assigned ids equal to the order.
         uvs = list(utils.edge_iter(u, v))
         self._graph.add_edges(uvs)
+        self._edges = None
 
     def get_edge_id(self, u, v):
         uvs = list(utils.edge_iter(u, v))
@@ -55,12 +58,14 @@ class CachedGraph:
         return src, dst
 
     def edges(self):
-        elist = self._graph.get_edgelist()
-        src = [u for u, _ in elist]
-        dst = [v for _, v in elist]
-        src = utils.convert_to_id_tensor(src)
-        dst = utils.convert_to_id_tensor(dst)
-        return src, dst
+        if self._edges is None:
+            elist = self._graph.get_edgelist()
+            src = [u for u, _ in elist]
+            dst = [v for _, v in elist]
+            src = utils.convert_to_id_tensor(src)
+            dst = utils.convert_to_id_tensor(dst)
+            self._edges = (src, dst)
+        return self._edges
 
     def in_degrees(self, v):
         degs = self._graph.indegree(list(v))

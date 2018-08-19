@@ -201,7 +201,7 @@ class DGLGraph(DiGraph):
         v_is_all = isinstance(v, str) and v == ALL
         assert u_is_all == v_is_all
         if u_is_all:
-            num_edges = self.number_of_edges()
+            num_edges = len(self._edge_list)
         else:
             u = utils.convert_to_id_tensor(u, self.context)
             v = utils.convert_to_id_tensor(v, self.context)
