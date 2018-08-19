@@ -53,7 +53,7 @@ class GATPrepare(nn.Module):
         ft = self.fc(h)
         a1 = self.attn_l(ft)
         a2 = self.attn_r(ft)
-        return {'h' : h, 'ft' : ft, 'a1' : a1, 'a2' : a2}
+        return {'h': h, 'ft': ft, 'a1': a1, 'a2': a2}
 
 
 class GATFinalize(nn.Module):
@@ -66,14 +66,15 @@ class GATFinalize(nn.Module):
             if indim != hiddendim:
                 self.residual_fc = nn.Linear(indim, hiddendim)
 
-    def forward(self, node, accum):
-        ret = accum['ft']
+    def forward(self, node):
+        ret = node['ft']
+        h = node['h']
         if self.residual:
             if self.residual_fc is not None:
-                ret = self.residual_fc(node['h']) + ret
+                ret = self.residual_fc(h) + ret
             else:
-                ret = node['h'] + ret
-        return {'head' : self.activation(ret)}
+                ret = h + ret
+        return self.activation(ret)
 
 
 class GAT(nn.Module):
@@ -100,6 +101,7 @@ class GAT(nn.Module):
         self.attn_phase2 = GATEdgePhaseTwo(attn_drop)
         # calc normalization factor
         self.attn_sum = lambda node, accum: {'a_sum': accum['a_sum']}
+        self.attn_mul = lambda node, accum: {'ft': accum['ft']}
         # input projection (no residual)
         for _ in range(num_heads):
             self.prp.append(GATPrepare(in_dim, num_hidden, in_drop))
@@ -136,15 +138,17 @@ class GAT(nn.Module):
         # set 1 tensor for spmv
         self.g.set_n_repr({'a_sum': self.tensor1})
         # call spmv
-        self.g.update_all('src_mul_edge', 'sum', self.attn_sum , batchable=True)
+        self.g.update_all('src_mul_edge', 'sum', self.attn_sum, batchable=True)
         # calculate attential and dropout
         self.g.update_edge(edge_func=self.attn_phase2, batchable=True)
         # pop out useless tensors
         self.g.pop_n_repr('a_sum')
         # restore node state
-        self.g.set_n_repr({'h': h, 'ft': ft})
+        self.g.set_n_repr({'ft': ft})
         # call spmv
-        self.g.update_all('src_mul_edge', 'sum', update_func, batchable=True)
+        self.g.update_all('src_mul_edge', 'sum', self.attn_mul, batchable=True)
+        self.g.set_n_repr({'h': h})
+        return update_func(self.g.get_n_repr())
 
     def forward(self, features):
         last = features
@@ -154,15 +158,14 @@ class GAT(nn.Module):
                 i = l * self.num_heads + hid
                 # prepare
                 self.g.set_n_repr(self.prp[i](last))
-                self.forward_one_head(self.fnl[i])
-                curr.append(self.g.pop_n_repr('head'))
+                head = self.forward_one_head(self.fnl[i])
+                curr.append(head)
 
             # merge all the heads
             last = torch.cat(curr, dim=1)
         # output projection
         self.g.set_n_repr(self.prp[-1](last))
-        self.forward_one_head(self.fnl[-1])
-        return self.g.pop_n_repr('head')
+        return self.forward_one_head(self.fnl[-1])
 
 
 def main(args):
