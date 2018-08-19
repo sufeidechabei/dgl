@@ -176,24 +176,29 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # initialize graph
-    dur = []
+    for_time = []
+    back_time = []
     for epoch in range(args.epochs):
+        optimizer.zero_grad()
         if epoch >= 3:
             t0 = time.time()
         # forward
         logits = model(features)
         logp = F.log_softmax(logits, 1)
         loss = F.nll_loss(logp, labels)
+        if epoch >= 3:
+            t1 = time.time()
 
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         if epoch >= 3:
-            dur.append(time.time() - t0)
+            t2 = time.time()
+            for_time.append(t1 - t0)
+            back_time.append(t2 - t1)
 
-        print("Epoch {:05d} | Loss {:.4f} | Time(s) {:.4f} | ETputs(KTEPS) {:.2f}".format(
-            epoch, loss.item(), np.mean(dur), n_edges / np.mean(dur) / 1000))
+        print("Epoch {:05d} | Loss {:.4f} | Forward Time(s) {:.4f} | Backward Time(s) {:.4f} | ETputs(KTEPS) {:.2f}".format(
+            epoch, loss.item(), np.mean(for_time), np.mean(back_time),  n_edges / (np.mean(for_time) + np.mean(back_time)) / 1000))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAT')
@@ -202,7 +207,7 @@ if __name__ == '__main__':
             help="Which GPU to use. Set -1 to use CPU.")
     parser.add_argument("--epochs", type=int, default=20,
             help="number of training epochs")
-    parser.add_argument("--num-heads", type=int, default=3,
+    parser.add_argument("--num-heads", type=int, default=8,
             help="number of attentional heads to use")
     parser.add_argument("--num-layers", type=int, default=1,
             help="number of hidden layers")
