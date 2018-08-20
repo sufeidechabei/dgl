@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import networkx as nx
 from dgl.data import register_data_args, load_data
+from dgl.backend import spmm_grad
 
 
 class GATEdgePhaseOne(nn.Module):
@@ -135,12 +136,10 @@ class GAT(nn.Module):
         a_v = torch.index_select(a1, 0, self.dst)
         a_u = torch.index_select(a2, 0, self.src)
         unnormalized_a = self.attn_phase1(a_v, a_u)
-        adjmat = torch.sparse.FloatTensor(self.indices, unnormalized_a.view(-1), [self.num_node, self.num_node])
-        a_sum = torch.spmm(adjmat, self.one_tensor)
+        a_sum = spmm_grad(self.indices, unnormalized_a.view(-1), self.one_tensor, [self.num_node, self.num_node])
         a_sum = torch.index_select(a_sum, 0, self.dst)
         a = self.attn_phase2(unnormalized_a, a_sum)
-        adjmat = torch.sparse.FloatTensor(self.indices, a.view(-1), [self.num_node, self.num_node])
-        ft = torch.spmm(adjmat, ft)
+        ft = spmm_grad(self.indices, a.view(-1), ft, [self.num_node, self.num_node])
         return finalize(h, ft)
 
     def forward(self, features):

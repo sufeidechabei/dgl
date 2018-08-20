@@ -909,11 +909,13 @@ class DGLGraph(DiGraph):
                 assert edge_repr.shape[1] == 1, \
                         "spmv only support scalar edge feature"
                 adjmat = self.cached_graph.adjmat(self.context)
-                adjmat = F.sparse_tensor(adjmat._indices(), F.view(edge_repr, (-1,)), adjmat.size())
+                adj_ind = adjmat._indices()
+                adj_val = F.view(edge_repr, (-1,))
+                matrix_dense_shape = adjmat.size()
                 reduced_msgs = {}
                 for key in self._node_frame.schemes:
                     col = self._node_frame[key]
-                    reduced_msgs[key] = F.spmm(adjmat, col)
+                    reduced_msgs[key] = F.spmm_grad(adj_ind, adj_val, col, matrix_dense_shape)
                 if len(reduced_msgs) == 1 and __REPR__ in reduced_msgs:
                     reduced_msgs = reduced_msgs[__REPR__]
                 node_repr = self.get_n_repr()
