@@ -55,6 +55,30 @@ def broadcast_to(x, to_array):
 def view(x, shape):
     return x.view(shape)
 
+class SPMM(th.autograd.Function):
+    @staticmethod
+    def forward(ctx, adj_ind, adj_val, feature, matrix_dense_shape):
+        ctx.save_for_backward(adj_ind, adj_val, feature)
+        ctx.matrix_dense_shape = matrix_dense_shape
+        n = feature.shape[0]
+        adjmat = th.sparse.FloatTensor(adj_ind, adj_val, matrix_dense_shape)
+        return th.spmm(adjmat, feature)
+
+    @staticmethod
+    def backward(ctx, grad):
+        adj_ind, adj_val, feature = ctx.saved_tensors
+        n = feature.shape[0]
+        grad_ind = grad_val = grad_feature = None
+        if ctx.needs_input_grad[1]:
+            a = th.index_select(grad, 0, adj_ind[0])
+            b = th.index_select(feature, 0, adj_ind[1])
+            grad_val = th.sum(a * b, dim=1).view(-1)
+        if ctx.needs_input_grad[2]:
+            adjmat = th.sparse.FloatTensor(adj_ind, adj_val, ctx.matrix_dense_shape)
+            adjmat = th.transpose(adjmat, 0, 1)
+            grad_feature = th.spmm(adjmat, grad)
+        return grad_ind, grad_val, grad_feature, None # None for matrix_dense_shape
+
 nonzero = th.nonzero
 squeeze = th.squeeze
 unsqueeze = th.unsqueeze
@@ -62,6 +86,7 @@ reshape = th.reshape
 zeros = th.zeros
 ones = th.ones
 spmm = th.spmm
+spmm_grad = SPMM.apply
 sort = th.sort
 arange = th.arange
 
