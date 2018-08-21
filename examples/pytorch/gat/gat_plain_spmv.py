@@ -17,27 +17,6 @@ from dgl.data import register_data_args, load_data
 from dgl.backend import spmm_grad
 
 
-class GATEdgePhaseOne(nn.Module):
-    def __init__(self):
-        super(GATEdgePhaseOne, self).__init__()
-
-    def forward(self, a1, a2):
-        attention = torch.exp(F.leaky_relu(a1 + a2))
-        return attention
-
-
-class GATEdgePhaseTwo(nn.Module):
-    def __init__(self, attn_drop):
-        super(GATEdgePhaseTwo, self).__init__()
-        self.attn_drop = attn_drop
-
-    def forward(self, a, a_sum):
-        attention = a / a_sum
-        if self.attn_drop != 0.0:
-            attention = F.dropout(attention, self.attn_drop)
-        return attention
-
-
 class GATPrepare(nn.Module):
     def __init__(self, indim, hiddendim, drop):
         super(GATPrepare, self).__init__()
@@ -91,12 +70,14 @@ class GAT(nn.Module):
                  use_cuda):
         super(GAT, self).__init__()
         self.num_node = len(g)
-        coo = nx.to_scipy_sparse_matrix(g, nodelist=range(self.num_node), format='coo')
-        self.num_edge = len(coo.data)
-        self.src = torch.LongTensor(coo.row)
-        self.dst = torch.LongTensor(coo.col)
+        self.coo = nx.to_scipy_sparse_matrix(g, nodelist=range(self.num_node), format='coo')
+        self.num_edge = len(self.coo.data)
+        self.src = torch.LongTensor(self.coo.row)
+        self.dst = torch.LongTensor(self.coo.col)
         self.indices = torch.stack([self.src, self.dst])
         self.one_tensor = torch.ones((self.num_node, 1))
+        self.attn_drop = attn_drop
+        self.use_cuda = use_cuda
         if use_cuda:
             self.src = self.src.cuda()
             self.dst = self.dst.cuda()
@@ -107,9 +88,6 @@ class GAT(nn.Module):
         self.num_heads = num_heads
         self.prp = nn.ModuleList()
         self.fnl = nn.ModuleList()
-        # edge update
-        self.attn_phase1 = GATEdgePhaseOne()
-        self.attn_phase2 = GATEdgePhaseTwo(attn_drop)
         # input projection (no residual)
         for _ in range(num_heads):
             self.prp.append(GATPrepare(in_dim, num_hidden, in_drop))
@@ -135,11 +113,23 @@ class GAT(nn.Module):
         h, ft, a1, a2 = prepare(last)
         a_v = torch.index_select(a1, 0, self.dst)
         a_u = torch.index_select(a2, 0, self.src)
-        unnormalized_a = self.attn_phase1(a_v, a_u)
+        a = F.leaky_relu(a_v + a_u)
+        a_detached = a.detach().view(-1)
+        if self.use_cuda:
+            a_detached = a_detached.cpu()
+        self.coo.data = a_detached.numpy()
+        a_max = self.coo.max(axis=0).toarray()
+        a_max = torch.from_numpy(a_max).view(-1, 1)
+        if self.use_cuda:
+            a_max = a_max.cuda()
+        a_max = torch.index_select(a_max, 0, self.dst)
+        unnormalized_a = torch.exp(a-a_max)
         a_sum = spmm_grad(self.indices, unnormalized_a.view(-1), self.one_tensor, [self.num_node, self.num_node])
         a_sum = torch.index_select(a_sum, 0, self.dst)
-        a = self.attn_phase2(unnormalized_a, a_sum)
-        ft = spmm_grad(self.indices, a.view(-1), ft, [self.num_node, self.num_node])
+        attention = unnormalized_a / a_sum
+        if self.attn_drop != 0.0:
+            attention = F.dropout(attention, self.attn_drop)
+        ft = spmm_grad(self.indices, attention.view(-1), ft, [self.num_node, self.num_node])
         return finalize(h, ft)
 
     def forward(self, features):

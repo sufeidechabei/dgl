@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import dgl
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
+from scipy.sparse import coo_matrix
 
 
 class GATEdgePhaseOne(nn.Module):
@@ -22,13 +23,20 @@ class GATEdgePhaseOne(nn.Module):
         super(GATEdgePhaseOne, self).__init__()
 
     def forward(self, u, v, edge):
-        attention = torch.exp(F.leaky_relu(u['a2'] + v['a1']))
+        attention = F.leaky_relu(u['a2'] + v['a1'])
         return {'attention': attention}
 
-
 class GATEdgePhaseTwo(nn.Module):
-    def __init__(self, attn_drop):
+    def __init__(self):
         super(GATEdgePhaseTwo, self).__init__()
+
+    def forward(self, u, v, edge):
+        attention = torch.exp(edge['attention'] - v['a_max'])
+        return {'attention': attention}
+
+class GATEdgePhaseThree(nn.Module):
+    def __init__(self, attn_drop):
+        super(GATEdgePhaseThree, self).__init__()
         self.attn_drop = attn_drop
 
     def forward(self, u, v, edge):
@@ -96,9 +104,12 @@ class GAT(nn.Module):
         self.num_heads = num_heads
         self.prp = nn.ModuleList()
         self.fnl = nn.ModuleList()
+        self.src, self.dst = self.g.cached_graph.edges()
+        self.use_cuda = use_cuda
         # edge update
         self.attn_phase1 = GATEdgePhaseOne()
-        self.attn_phase2 = GATEdgePhaseTwo(attn_drop)
+        self.attn_phase2 = GATEdgePhaseTwo()
+        self.attn_phase3 = GATEdgePhaseThree(attn_drop)
         # calc normalization factor
         self.attn_sum = lambda node, accum: {'a_sum': accum['a_sum']}
         self.attn_mul = lambda node, accum: {'ft': accum['ft']}
@@ -129,9 +140,23 @@ class GAT(nn.Module):
     def forward_one_head(self, update_func):
         # calc unnormalized attention value
         self.g.update_edge(edge_func=self.attn_phase1, batchable=True)
+        # calc a_max on cpu
+        attention = self.g.get_e_repr()['attention']
+        a_detached = attention.detach().view(-1)
+        if self.use_cuda:
+            a_detached = a_detached.cpu()
+        coo = coo_matrix((a_detached.numpy(), (self.src, self.dst)), shape=[len(self.g), len(self.g)])
+        a_max = coo.max(axis=0)
+        a_max = torch.from_numpy(a_max.toarray()).view(-1, 1)
+        if self.use_cuda:
+            a_max = a_max.cuda()
+        self.g.set_n_repr({'a_max': a_max})
+        # normalize a by deduct max
+        self.g.update_edge(edge_func=self.attn_phase2, batchable=True)
         # pop out useless features
         self.g.pop_n_repr('a1')
         self.g.pop_n_repr('a2')
+        self.g.pop_n_repr('a_max')
         # stash features not needed for spmv
         h = self.g.pop_n_repr('h')
         ft = self.g.pop_n_repr('ft')
@@ -140,7 +165,7 @@ class GAT(nn.Module):
         # call spmv
         self.g.update_all('src_mul_edge', 'sum', self.attn_sum, batchable=True)
         # calculate attential and dropout
-        self.g.update_edge(edge_func=self.attn_phase2, batchable=True)
+        self.g.update_edge(edge_func=self.attn_phase3, batchable=True)
         # pop out useless tensors
         self.g.pop_n_repr('a_sum')
         # restore node state
