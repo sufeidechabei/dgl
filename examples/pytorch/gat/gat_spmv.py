@@ -105,6 +105,7 @@ class GAT(nn.Module):
         self.prp = nn.ModuleList()
         self.fnl = nn.ModuleList()
         self.src, self.dst = self.g.cached_graph.edges()
+        self.src, self.dst = np.array(self.src.tolist()), np.array(self.dst.tolist())
         self.use_cuda = use_cuda
         # edge update
         self.attn_phase1 = GATEdgePhaseOne()
