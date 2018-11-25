@@ -73,7 +73,7 @@ def mean(input, dim):
     return nd.mean(input, axis=dim)
 
 def max(input, dim):
-    return nd.max(input, axis=dim).asnumpy()[0]
+    return nd.max(input, axis=dim)
 
 def cat(seq, dim):
     return nd.concat(*seq, dim=dim)
